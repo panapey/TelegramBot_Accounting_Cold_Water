@@ -26,7 +26,7 @@ async def start_cmd_handler(message: types.Message):
                    message.from_user.username)
     conn.commit()
 
-    await message.answer("Добро пожаловать! Вы успешно зарегистрировались в нашей системе")
+    await message.answer("Добро пожаловать! Вы успешно зарегистрировались в нашей системе, для вывода списка функций вызовите команду /help")
 
 
 @dp.message_handler(commands=['subscribe'])
@@ -124,6 +124,14 @@ async def calculate_payment_cmd_handler(message: types.Message):
     total_payment = total_usage * 45
 
     await message.answer(f"Сумма к оплате: {total_payment} рублей")
+
+@dp.message_handler(commands=['help'])
+async def help_message(message: types.Message):
+    await message.answer("""/calculate_payment - расчет оплаты,
+                            /add_counter_value - добавление показаний счетчика
+                            /register_meter - добавление счетчика
+                            /subscribe - подписка на уведомления
+                         """)
 
 
 if __name__ == '__main__':
