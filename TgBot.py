@@ -112,18 +112,16 @@ async def add_counter_value_cmd_handler(message: types.Message):
 @dp.message_handler(commands=['calculate_payment'])
 async def calculate_payment_cmd_handler(message: types.Message):
     # Выборка информации о показателях счетчиков из таблицы
-    cursor.execute("SELECT SUM(value) FROM counter_values WHERE user_id = (SELECT id FROM users WHERE telegram_id = ?)",
-                   message.from_user.id)
-    row = cursor.fetchone()
-    if row is None:
-        await message.answer("No usage data found for user")
-        return
-    total_usage = row[0]
+    cursor.execute(
+        "SELECT counter_id, SUM(value) FROM counter_values WHERE user_id = (SELECT id FROM users WHERE telegram_id = ?) GROUP BY counter_id",
+        message.from_user.id)
+    rows = cursor.fetchall()
+    for row in rows:
+        counter_id = row[0]
+        total_usage = row[1]
+        total_payment = total_usage * 45
+        await message.answer(f"Сумма к оплате для счетчика {counter_id}: {total_payment} рублей")
 
-    # Расчет суммы к оплате
-    total_payment = total_usage * 45
-
-    await message.answer(f"Сумма к оплате: {total_payment} рублей")
 
 @dp.message_handler(commands=['help'])
 async def help_message(message: types.Message):
