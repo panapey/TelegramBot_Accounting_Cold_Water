@@ -7,7 +7,7 @@ pip install -r requirements.txt
 В "TgBot.py" нужно указать данные для подключения к БД MSSQL и Токен для Бота
 ```cpp
 conn = pyodbc.connect(
-    'DRIVER={ODBC Driver 17 for SQL Server};SERVER=LAPTOP-DA4JVMQ8\SQLEXPRESS;DATABASE=botdb;Trusted_Connection=yes')
+    'DRIVER={ODBC Driver 17 for SQL Server};SERVER=YOUR_SERVER;DATABASE=YOUR_DATABASE;Trusted_Connection=yes')
 ```
 ```cpp
 bot = Bot(token='YOUR_TOKEN')
