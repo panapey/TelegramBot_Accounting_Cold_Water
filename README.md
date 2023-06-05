@@ -1,6 +1,6 @@
 TelegramBot_Accounting_Cold_Water
 
-Run in project directory:
+Запустить в директории проекта:
 ```cpp
 pip install -r requirements.txt
 ```
