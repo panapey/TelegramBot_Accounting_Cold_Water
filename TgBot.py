@@ -1,14 +1,61 @@
+import logging
+
 import pyodbc
 from aiogram import Bot, Dispatcher, executor, types
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from aiogram.contrib.fsm_storage.memory import MemoryStorage
+from aiogram.dispatcher import FSMContext
+from aiogram.dispatcher.filters.state import State, StatesGroup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-# Подключение к базе данных mssql
-conn = pyodbc.connect(
-    'DRIVER={ODBC Driver 17 for SQL Server};SERVER=YOUR_SERVER;DATABASE=YOUR_DATABASE;Trusted_Connection=yes')
+# Настройка логирования
+logging.basicConfig(level=logging.INFO)
+
+# Инициализация бота и диспетчера
+bot = Bot(token="6129816762:AAHmIP75MdM9aM-M1LD1ckIx6UGIHKmzkik")
+storage = MemoryStorage()
+dp = Dispatcher(bot, storage=storage)
+
+# Подключение к базе данных
+conn = pyodbc.connect("DRIVER={ODBC Driver 17 for SQL Server};"
+                      "SERVER=LAPTOP-DA4JVMQ8\SQLEXPRESS;"
+                      "DATABASE=botdb;"
+                      "Trusted_Connection=yes;")
 cursor = conn.cursor()
 
-bot = Bot(token='YOUR_BOT_TOKEN_HERE')
-dp = Dispatcher(bot)
+
+# Определение состояний для конечного автомата
+class Form(StatesGroup):
+    full_name = State()
+
+
+class MeterForm(StatesGroup):
+    meter_type = State()
+    serial_number = State()
+    location = State()
+
+
+class CounterForm(StatesGroup):
+    counter_id = State()
+    value = State()
+
+
+
+async def send_action_keyboard(chat_id):
+    # Создание кнопок
+    button1 = InlineKeyboardButton("Подписаться на уведомления", callback_data="subscribe")
+    button2 = InlineKeyboardButton("Зарегистрировать прибор учета", callback_data="register_meter")
+    button3 = InlineKeyboardButton("Добавить показание счетчика", callback_data="add_counter_value")
+    button4 = InlineKeyboardButton("Рассчитать платеж", callback_data="calculate_payment")
+
+    # Создание клавиатуры
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(button1)
+    keyboard.add(button2)
+    keyboard.add(button3)
+    keyboard.add(button4)
+
+    # Отправка сообщения с клавиатурой
+    await bot.send_message(chat_id, "Выберите действие:", reply_markup=keyboard)
 
 
 @dp.message_handler(commands=['start'])
@@ -17,57 +64,122 @@ async def start_cmd_handler(message: types.Message):
     cursor.execute("SELECT COUNT(*) FROM users WHERE telegram_id = ?", message.from_user.id)
     row = cursor.fetchone()
     if row[0] > 0:
-        await message.answer("Вы уже зарегистрированы в нашей системе")
-        return
+        # Выборка информации о пользователе из таблицы
+        cursor.execute("SELECT full_name, account_number FROM users WHERE telegram_id = ?", message.from_user.id)
+        row = cursor.fetchone()
+        full_name = row[0]
+        account_number = row[1]
+
+        # Отправка сообщения с приветствием и информацией о пользователе
+        await message.answer(f"Добро пожаловать, {full_name}, ваш единый лицевой счет {account_number}")
+    else:
+        # Отправка сообщения с запросом информации о пользователе
+        await message.answer("Пожалуйста, введите ваше ФИО и единый лицевой счет в формате:\nФИО;Номер лицевого счета")
+
+        # Сохранение состояния ожидания ввода информации о пользователе
+        await Form.full_name.set()
+
+    # Отправка клавиатуры с кнопками для выбора действия
+    await send_action_keyboard(message.chat.id)
+
+
+@dp.message_handler(state=Form.full_name)
+async def process_full_name(message: types.Message, state: FSMContext):
+    # Разбор введенной информации о пользователе
+    full_name, account_number = message.text.split(';')
 
     # Добавление информации о пользователе в таблицу
-    cursor.execute("INSERT INTO users (telegram_id, chat_id, first_name, last_name, username) VALUES (?, ?, ?, ?, ?)",
-                   message.from_user.id, message.chat.id, message.from_user.first_name, message.from_user.last_name,
-                   message.from_user.username)
+    cursor.execute(
+        "INSERT INTO users (telegram_id, chat_id, first_name, last_name, username, full_name, account_number) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        message.from_user.id, message.chat.id, message.from_user.first_name, message.from_user.last_name,
+        message.from_user.username, full_name.strip(), account_number.strip())
     conn.commit()
 
-    await message.answer("Добро пожаловать! Вы успешно зарегистрировались в нашей системе, для вывода списка функций вызовите команду /help")
+    # Отправка сообщения с приветствием и информацией о пользователе
+    await message.answer(f"Добро пожаловать, {full_name}, ваш единый лицевой счет {account_number}")
+
+    # Отправка клавиатуры с кнопками для выбора действия
+    await send_action_keyboard(message.chat.id)
+
+    # Сброс состояния
+    await state.finish()
 
 
-@dp.message_handler(commands=['subscribe'])
-async def subscribe_cmd_handler(message: types.Message):
+@dp.callback_query_handler(lambda c: c.data == 'subscribe')
+async def process_callback_subscribe(callback_query: types.CallbackQuery):
+    await bot.answer_callback_query(callback_query.id)
+
     # Добавление информации о пользователе в таблицу
-    cursor.execute("UPDATE users SET chat_id = ? WHERE telegram_id = ?", message.chat.id, message.from_user.id)
+    cursor.execute("UPDATE users SET chat_id = ? WHERE telegram_id = ?", callback_query.message.chat.id,
+                   callback_query.from_user.id)
     conn.commit()
 
-    await message.answer("Вы подписались на ежемесячные уведомления о внесении показателей счетчиков")
+    await bot.send_message(callback_query.from_user.id,
+                           "Вы подписались на ежемесячные уведомления о внесении показателей счетчиков")
 
 
-async def send_notifications():
-    # Выборка информации о пользователях из таблицы
-    cursor.execute("SELECT telegram_id, chat_id FROM users WHERE chat_id IS NOT NULL")
-    rows = cursor.fetchall()
+@dp.callback_query_handler(lambda c: c.data == 'register_meter')
+async def process_callback_register_meter(callback_query: types.CallbackQuery):
+    await bot.answer_callback_query(callback_query.id)
 
-    # Отправка уведомлений пользователям
-    for row in rows:
-        user_id = row[0]
-        chat_id = row[1]
+    # Создание кнопок
+    button1 = InlineKeyboardButton("Холодная вода", callback_data="register_meter_cold")
+    button2 = InlineKeyboardButton("Горячая вода", callback_data="register_meter_hot")
 
-        await bot.send_message(chat_id, f"Не забудьте внести показатели счетчиков за этот месяц!")
+    # Создание клавиатуры
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(button1)
+    keyboard.add(button2)
 
-
-# Создание планировщика задач
-scheduler = AsyncIOScheduler()
-scheduler.add_job(send_notifications, 'cron', day=1)  # Запуск задания 1-го числа каждого месяца
-scheduler.start()
+    # Отправка сообщения с клавиатурой
+    await bot.send_message(callback_query.from_user.id, "Выберите тип воды:", reply_markup=keyboard)
 
 
-@dp.message_handler(commands=['register_meter'])
-async def register_meter_cmd_handler(message: types.Message):
-    # Разбор аргументов команды
-    args = message.text.split()[1:]
-    if len(args) != 3:
-        await message.answer("Использование: /register_meter <type> <serial_number> <location>")
-        return
+@dp.callback_query_handler(lambda c: c.data == 'register_meter_cold')
+async def process_callback_register_meter_cold(callback_query: types.CallbackQuery, state: FSMContext):
+    await bot.answer_callback_query(callback_query.id)
 
-    meter_type = args[0]
-    serial_number = args[1]
-    location = args[2]
+    # Сохранение типа прибора учета
+    await MeterForm.meter_type.set()
+    await state.update_data(meter_type='cold')
+
+    # Отправка сообщения с запросом серийного номера
+    await bot.send_message(callback_query.from_user.id, "Введите серийный номер прибора учета:")
+    await MeterForm.serial_number.set()
+
+
+@dp.callback_query_handler(lambda c: c.data == 'register_meter_hot')
+async def process_callback_register_meter_hot(callback_query: types.CallbackQuery, state: FSMContext):
+    await bot.answer_callback_query(callback_query.id)
+
+    # Сохранение типа прибора учета
+    await MeterForm.meter_type.set()
+    await state.update_data(meter_type='hot')
+
+    # Отправка сообщения с запросом серийного номера
+    await bot.send_message(callback_query.from_user.id, "Введите серийный номер прибора учета:")
+    await MeterForm.serial_number.set()
+
+
+@dp.message_handler(state=MeterForm.serial_number)
+async def process_serial_number(message: types.Message, state: FSMContext):
+    # Сохранение серийного номера прибора учета
+    await state.update_data(serial_number=message.text)
+
+    # Отправка сообщения с запросом расположения прибора учета
+    await message.answer("Введите расположение прибора учета:")
+
+    # Смена состояния на ожидание ввода расположения прибора учета
+    await MeterForm.next()
+
+
+@dp.message_handler(state=MeterForm.location)
+async def process_location(message: types.Message, state: FSMContext):
+    # Получение данных из состояния
+    data = await state.get_data()
+    meter_type = data.get('meter_type')
+    serial_number = data.get('serial_number')
+    location = message.text
 
     # Добавление записи в таблицу приборов учета
     cursor.execute(
@@ -75,61 +187,103 @@ async def register_meter_cmd_handler(message: types.Message):
         message.from_user.id, meter_type, serial_number, location)
     conn.commit()
 
+    # Отправка сообщения об успешной регистрации прибора учета
+
     await message.answer(
         f"Прибор учета {meter_type} зарегистрирован: серийный номер {serial_number}, расположение {location}")
 
+    # Сброс состояния
+    await state.finish()
 
-@dp.message_handler(commands=['add_counter_value'])
-async def add_counter_value_cmd_handler(message: types.Message):
-    # Разбор аргументов команды
-    args = message.text.split()[1:]
-    if len(args) != 2:
-        await message.answer("Использование: /add_counter_value <counter_id> <value>")
-        return
 
-    counter_id = int(args[0])
-    value = float(args[1])
+@dp.callback_query_handler(lambda c: c.data == 'add_counter_value')
+async def process_callback_add_counter_value(callback_query: types.CallbackQuery):
+    await bot.answer_callback_query(callback_query.id)
 
-    # Check if user_id and counter_id exist in users and meters tables
-    user_id = cursor.execute("SELECT id FROM users WHERE telegram_id = ?", message.from_user.id).fetchone()
-    if not user_id:
-        await message.answer("User not found in users table")
-        return
-    counter_exists = cursor.execute("SELECT 1 FROM meters WHERE id = ?", counter_id).fetchone()
-    if not counter_exists:
-        await message.answer("Counter not found in meters table")
-        return
+    # Выборка информации о приборах учета пользователя из таблицы
+    cursor.execute(
+        "SELECT id, type, meter_type FROM meters WHERE user_id = (SELECT id FROM users WHERE telegram_id = ?)",
+        callback_query.from_user.id)
+    rows = cursor.fetchall()
+
+    # Формирование текста сообщения
+    text = "Выберите прибор учета:\n"
+    for row in rows:
+        counter_id = row[0]
+        counter_type = row[1]
+        meter_type = row[2]
+        text += f"{counter_id}: {counter_type} ({meter_type})\n"
+
+    # Отправка сообщения с выбором прибора учета
+    await bot.send_message(callback_query.from_user.id, text)
+
+    # Сохранение состояния ожидания выбора прибора учета
+    await CounterForm.counter_id.set()
+
+
+@dp.message_handler(state=CounterForm.counter_id)
+async def process_counter_id(message: types.Message, state: FSMContext):
+    # Сохранение выбранного прибора учета
+    await state.update_data(counter_id=message.text)
+
+    # Отправка сообщения с запросом показания счетчика
+    await message.answer("Введите показание счетчика:")
+
+    # Смена состояния на ожидание ввода показания счетчика
+    await CounterForm.next()
+
+
+@dp.message_handler(state=CounterForm.value)
+async def process_counter_value(message: types.Message, state: FSMContext):
+    # Получение данных из состояния
+    data = await state.get_data()
+    counter_id = data.get('counter_id')
+    value = message.text
 
     # Добавление записи в таблицу показателей счетчиков
     cursor.execute(
-        "INSERT INTO counter_values (user_id, counter_id, value) VALUES (?, ?, ?)",
-        user_id[0], counter_id, value)
+        "INSERT INTO counter_values (user_id, counter_id, value) VALUES ((SELECT id FROM users WHERE telegram_id = ?), ?, ?)",
+        message.from_user.id, counter_id, value)
     conn.commit()
 
+    # Отправка сообщения об успешном добавлении показания счетчика
     await message.answer(f"Значение счетчика {counter_id} добавлено: {value}")
 
+    # Сброс состояния
+    await state.finish()
 
-@dp.message_handler(commands=['calculate_payment'])
-async def calculate_payment_cmd_handler(message: types.Message):
+
+@dp.callback_query_handler(lambda c: c.data == 'calculate_payment')
+async def process_callback_calculate_payment(callback_query: types.CallbackQuery):
+    await bot.answer_callback_query(callback_query.id)
+
     # Выборка информации о показателях счетчиков из таблицы
     cursor.execute(
-        "SELECT counter_id, SUM(value) FROM counter_values WHERE user_id = (SELECT id FROM users WHERE telegram_id = ?) GROUP BY counter_id",
-        message.from_user.id)
+        "SELECT m.meter_type, SUM(cv.value) FROM counter_values cv JOIN meters m ON cv.counter_id = m.id WHERE cv.user_id = (SELECT id FROM users WHERE telegram_id = ?) GROUP BY m.meter_type",
+        callback_query.from_user.id)
     rows = cursor.fetchall()
+
+    # Расчет платежей
+    total_cold_water_usage = 0
+    total_hot_water_usage = 0
     for row in rows:
-        counter_id = row[0]
+        meter_type = row[0]
         total_usage = row[1]
-        total_payment = total_usage * 45
-        await message.answer(f"Сумма к оплате для счетчика {counter_id}: {total_payment} рублей")
+        if meter_type == 'Холодная вода':
+            total_cold_water_usage += total_usage
+            total_payment = total_usage * 45
+            await bot.send_message(callback_query.from_user.id,
+                                   f"Сумма к оплате за холодную воду: {total_payment} рублей")
+        elif meter_type == 'Горячая вода':
+            total_hot_water_usage += total_usage
+            total_payment = total_usage * 55
+            await bot.send_message(callback_query.from_user.id,
+                                   f"Сумма к оплате за горячую воду: {total_payment} рублей")
 
-
-@dp.message_handler(commands=['help'])
-async def help_message(message: types.Message):
-    await message.answer("""/calculate_payment - расчет оплаты,
-                            /add_counter_value - добавление показаний счетчика
-                            /register_meter - добавление счетчика
-                            /subscribe - подписка на уведомления
-                         """)
+    # Расчет платежа за сточные воды
+    total_sewage_payment = (total_cold_water_usage + total_hot_water_usage) * 35
+    await bot.send_message(callback_query.from_user.id,
+                           f"Сумма к оплате за сточные воды: {total_sewage_payment} рублей")
 
 
 if __name__ == '__main__':
