@@ -11,13 +11,13 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 logging.basicConfig(level=logging.INFO)
 
 # Инициализация бота и диспетчера
-bot = Bot(token="6047380957:AAF3LLm8bM0Q7144-fOtpXhrFTUrpQPXuC0")
+bot = Bot(token="YOUR_BOT_TOKEN")
 storage = MemoryStorage()
 dp = Dispatcher(bot, storage=storage)
 
 # Подключение к базе данных
 conn = pyodbc.connect("DRIVER={ODBC Driver 17 for SQL Server};"
-                      "SERVER=LAPTOP-DA4JVMQ8\SQLEXPRESS;"
+                      "SERVER=YOUR_SERVER;"
                       "DATABASE=botdb;"
                       "Trusted_Connection=yes;")
 cursor = conn.cursor()
