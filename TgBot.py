@@ -11,7 +11,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 logging.basicConfig(level=logging.INFO)
 
 # Инициализация бота и диспетчера
-bot = Bot(token="6129816762:AAHmIP75MdM9aM-M1LD1ckIx6UGIHKmzkik")
+bot = Bot(token="6047380957:AAF3LLm8bM0Q7144-fOtpXhrFTUrpQPXuC0")
 storage = MemoryStorage()
 dp = Dispatcher(bot, storage=storage)
 
@@ -37,7 +37,6 @@ class MeterForm(StatesGroup):
 class CounterForm(StatesGroup):
     counter_id = State()
     value = State()
-
 
 
 async def send_action_keyboard(chat_id):
@@ -196,6 +195,25 @@ async def process_location(message: types.Message, state: FSMContext):
     await state.finish()
 
 
+selected_counter_id = None
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith('select_counter:'))
+async def process_callback_select_counter(callback_query: types.CallbackQuery):
+    global selected_counter_id
+    print(callback_query.data)
+    await bot.answer_callback_query(callback_query.id)
+
+    # Получение выбранного прибора учета из данных callback
+    counter_id = callback_query.data.split(':')[1]
+
+    # Сохранение выбранного прибора учета в глобальную переменную
+    selected_counter_id = counter_id
+
+    # Отправка сообщения с запросом показания счетчика
+    await bot.send_message(callback_query.from_user.id, "Введите показание счетчика:")
+
+
 @dp.callback_query_handler(lambda c: c.data == 'add_counter_value')
 async def process_callback_add_counter_value(callback_query: types.CallbackQuery):
     await bot.answer_callback_query(callback_query.id)
@@ -208,49 +226,46 @@ async def process_callback_add_counter_value(callback_query: types.CallbackQuery
 
     # Формирование текста сообщения
     text = "Выберите прибор учета:\n"
+
+    # Создание кнопок для выбора прибора учета
+    buttons = []
     for row in rows:
         counter_id = row[0]
         counter_type = row[1]
         meter_type = row[2]
-        text += f"{counter_id}: {counter_type} ({meter_type})\n"
+        button_text = f"{counter_id}: {counter_type} ({meter_type})"
+        button_callback_data = f"select_counter:{counter_id}"
+        buttons.append(InlineKeyboardButton(button_text, callback_data=button_callback_data))
+
+        # Вывод значения callback_data для проверки
+        print(f"Button callback_data: {button_callback_data}")
+
+    # Создание клавиатуры с кнопками
+    keyboard = InlineKeyboardMarkup(row_width=1)
+    keyboard.add(*buttons)
 
     # Отправка сообщения с выбором прибора учета
-    await bot.send_message(callback_query.from_user.id, text)
-
-    # Сохранение состояния ожидания выбора прибора учета
-    await CounterForm.counter_id.set()
+    await bot.send_message(callback_query.from_user.id, text, reply_markup=keyboard)
 
 
-@dp.message_handler(state=CounterForm.counter_id)
-async def process_counter_id(message: types.Message, state: FSMContext):
-    # Сохранение выбранного прибора учета
-    await state.update_data(counter_id=message.text)
+@dp.message_handler()
+async def process_counter_value(message: types.Message):
+    global selected_counter_id
 
-    # Отправка сообщения с запросом показания счетчика
-    await message.answer("Введите показание счетчика:")
-
-    # Смена состояния на ожидание ввода показания счетчика
-    await CounterForm.next()
-
-
-@dp.message_handler(state=CounterForm.value)
-async def process_counter_value(message: types.Message, state: FSMContext):
-    # Получение данных из состояния
-    data = await state.get_data()
-    counter_id = data.get('counter_id')
+    # Получение значения счетчика из сообщения
     value = message.text
 
     # Добавление записи в таблицу показателей счетчиков
     cursor.execute(
         "INSERT INTO counter_values (user_id, counter_id, value) VALUES ((SELECT id FROM users WHERE telegram_id = ?), ?, ?)",
-        message.from_user.id, counter_id, value)
+        message.from_user.id, selected_counter_id, value)
     conn.commit()
 
     # Отправка сообщения об успешном добавлении показания счетчика
-    await message.answer(f"Значение счетчика {counter_id} добавлено: {value}")
+    await message.answer(f"Значение счетчика {selected_counter_id} добавлено: {value}")
 
-    # Сброс состояния
-    await state.finish()
+    # Сброс значения глобальной переменной
+    selected_counter_id = None
 
 
 @dp.callback_query_handler(lambda c: c.data == 'calculate_payment')
