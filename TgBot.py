@@ -71,6 +71,7 @@ async def start_cmd_handler(message: types.Message):
 
         # Отправка сообщения с приветствием и информацией о пользователе
         await message.answer(f"Добро пожаловать, {full_name}, ваш единый лицевой счет {account_number}")
+        await send_action_keyboard(message.chat.id)
     else:
         # Отправка сообщения с запросом информации о пользователе
         await message.answer("Пожалуйста, введите ваше ФИО и единый лицевой счет в формате:\nФИО;Номер лицевого счета")
@@ -79,7 +80,6 @@ async def start_cmd_handler(message: types.Message):
         await Form.full_name.set()
 
     # Отправка клавиатуры с кнопками для выбора действия
-    await send_action_keyboard(message.chat.id)
 
 
 @dp.message_handler(state=Form.full_name)
@@ -288,12 +288,17 @@ async def process_callback_calculate_payment(callback_query: types.CallbackQuery
             button = InlineKeyboardButton(button_text, callback_data=f'meter_{meter_id}')
             buttons.append(button)
 
+    # Создание кнопки для расчета оплаты сточных вод
+    sewage_button = InlineKeyboardButton('Расчитать оплату сточных вод', callback_data='sewage_payment')
+
     # Создание клавиатуры
     keyboard = InlineKeyboardMarkup()
     keyboard.add(*buttons)
+    keyboard.add(sewage_button)
 
     # Отправка сообщения с клавиатурой
-    await bot.send_message(callback_query.from_user.id, 'Выберите счетчик:', reply_markup=keyboard)
+    await bot.send_message(callback_query.from_user.id, 'Выберите счетчик или расчитайте оплату сточных вод:',
+                           reply_markup=keyboard)
 
 
 @dp.callback_query_handler(lambda c: c.data.startswith('meter_'))
@@ -321,6 +326,23 @@ async def process_callback_meter(callback_query: types.CallbackQuery):
             total_payment = total_usage * 55
             await bot.send_message(callback_query.from_user.id,
                                    f"Сумма к оплате за горячую воду: {total_payment} рублей")
+
+@dp.callback_query_handler(lambda c: c.data == 'sewage_payment')
+async def process_callback_sewage_payment(callback_query: types.CallbackQuery):
+    await bot.answer_callback_query(callback_query.id)
+
+    # Выборка информации о показателях всех счетчиков из таблицы
+    cursor.execute(
+        "SELECT SUM(cv.value) FROM counter_values cv JOIN meters m ON cv.counter_id = m.id WHERE cv.user_id = (SELECT id FROM users WHERE telegram_id = ?)",
+        callback_query.from_user.id)
+    total_usage_row = cursor.fetchone()
+
+    # Расчет платежа за сточные воды
+    if total_usage_row:
+        total_usage = total_usage_row[0]
+        total_sewage_payment = total_usage * 35
+        await bot.send_message(callback_query.from_user.id,
+                               f"Сумма к оплате за сточные воды: {total_sewage_payment} рублей")
 
 
 if __name__ == '__main__':
