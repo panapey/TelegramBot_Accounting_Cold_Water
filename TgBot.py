@@ -220,7 +220,7 @@ async def process_callback_add_counter_value(callback_query: types.CallbackQuery
 
     # Выборка информации о приборах учета пользователя из таблицы
     cursor.execute(
-        "SELECT id, type, meter_type FROM meters WHERE user_id = (SELECT id FROM users WHERE telegram_id = ?)",
+        "SELECT id, type, serial_number FROM meters WHERE user_id = (SELECT id FROM users WHERE telegram_id = ?)",
         callback_query.from_user.id)
     rows = cursor.fetchall()
 
@@ -232,8 +232,8 @@ async def process_callback_add_counter_value(callback_query: types.CallbackQuery
     for row in rows:
         counter_id = row[0]
         counter_type = row[1]
-        meter_type = row[2]
-        button_text = f"{counter_id}: {counter_type} ({meter_type})"
+        serial_number = row[2]
+        button_text = f"{counter_id}: {counter_type} ({serial_number})"
         button_callback_data = f"select_counter:{counter_id}"
         buttons.append(InlineKeyboardButton(button_text, callback_data=button_callback_data))
 
@@ -272,33 +272,55 @@ async def process_counter_value(message: types.Message):
 async def process_callback_calculate_payment(callback_query: types.CallbackQuery):
     await bot.answer_callback_query(callback_query.id)
 
-    # Выборка информации о показателях счетчиков из таблицы
+    # Выборка информации о зарегистрированных счетчиках
     cursor.execute(
-        "SELECT m.meter_type, SUM(cv.value) FROM counter_values cv JOIN meters m ON cv.counter_id = m.id WHERE cv.user_id = (SELECT id FROM users WHERE telegram_id = ?) GROUP BY m.meter_type",
+        "SELECT m.id, m.type FROM meters m WHERE m.user_id = (SELECT id FROM users WHERE telegram_id = ?)",
         callback_query.from_user.id)
     rows = cursor.fetchall()
 
-    # Расчет платежей
-    total_cold_water_usage = 0
-    total_hot_water_usage = 0
+    # Создание кнопок для выбора счетчика
+    buttons = []
     for row in rows:
+        meter_id = row[0]
+        meter_type = row[1]
+        button_text = f"{meter_id}: {meter_type}"
+        if meter_type:
+            button = InlineKeyboardButton(button_text, callback_data=f'meter_{meter_id}')
+            buttons.append(button)
+
+    # Создание клавиатуры
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(*buttons)
+
+    # Отправка сообщения с клавиатурой
+    await bot.send_message(callback_query.from_user.id, 'Выберите счетчик:', reply_markup=keyboard)
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith('meter_'))
+async def process_callback_meter(callback_query: types.CallbackQuery):
+    await bot.answer_callback_query(callback_query.id)
+
+    # Получение идентификатора счетчика из данных callback
+    meter_id = int(callback_query.data.split('_')[1])
+
+    # Выборка информации о показателях счетчика из таблицы
+    cursor.execute(
+        "SELECT m.type, SUM(cv.value) FROM counter_values cv JOIN meters m ON cv.counter_id = m.id WHERE cv.user_id = (SELECT id FROM users WHERE telegram_id = ?) AND cv.counter_id = ? GROUP BY m.type",
+        callback_query.from_user.id, meter_id)
+    row = cursor.fetchone()
+
+    # Расчет платежа
+    if row:
         meter_type = row[0]
         total_usage = row[1]
-        if meter_type == 'Холодная вода':
-            total_cold_water_usage += total_usage
+        if meter_type == 'cold':
             total_payment = total_usage * 45
             await bot.send_message(callback_query.from_user.id,
                                    f"Сумма к оплате за холодную воду: {total_payment} рублей")
-        elif meter_type == 'Горячая вода':
-            total_hot_water_usage += total_usage
+        elif meter_type == 'hot':
             total_payment = total_usage * 55
             await bot.send_message(callback_query.from_user.id,
                                    f"Сумма к оплате за горячую воду: {total_payment} рублей")
-
-    # Расчет платежа за сточные воды
-    total_sewage_payment = (total_cold_water_usage + total_hot_water_usage) * 35
-    await bot.send_message(callback_query.from_user.id,
-                           f"Сумма к оплате за сточные воды: {total_sewage_payment} рублей")
 
 
 if __name__ == '__main__':
