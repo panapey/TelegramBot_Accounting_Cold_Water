@@ -11,16 +11,18 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 logging.basicConfig(level=logging.INFO)
 
 # Инициализация бота и диспетчера
-bot = Bot(token="YOUR_BOT_TOKEN")
+bot = Bot(token="5604421408:AAGvzPFtK6iZ71xKYGG7XH_Zhkjji9vm1tU")
 storage = MemoryStorage()
 dp = Dispatcher(bot, storage=storage)
 
 # Подключение к базе данных
 conn = pyodbc.connect("DRIVER={ODBC Driver 17 for SQL Server};"
-                      "SERVER=YOUR_SERVER;"
+                      "SERVER=LAPTOP-DA4JVMQ8\SQLEXPRESS;"
                       "DATABASE=botdb;"
                       "Trusted_Connection=yes;")
 cursor = conn.cursor()
+
+meter_type_translation = {'cold': 'холодная вода', 'hot': 'горячая вода'}
 
 
 # Определение состояний для конечного автомата
@@ -79,29 +81,31 @@ async def start_cmd_handler(message: types.Message):
         # Сохранение состояния ожидания ввода информации о пользователе
         await Form.full_name.set()
 
-    # Отправка клавиатуры с кнопками для выбора действия
-
 
 @dp.message_handler(state=Form.full_name)
 async def process_full_name(message: types.Message, state: FSMContext):
-    # Разбор введенной информации о пользователе
-    full_name, account_number = message.text.split(';')
+    # Разделение введенных данных на ФИО и номер лицевого счета
+    user_data = message.text.split(';')
+    full_name = user_data[0]
+    account_number = user_data[1]
 
-    # Добавление информации о пользователе в таблицу
-    cursor.execute(
-        "INSERT INTO users (telegram_id, chat_id, first_name, last_name, username, full_name, account_number) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        message.from_user.id, message.chat.id, message.from_user.first_name, message.from_user.last_name,
-        message.from_user.username, full_name.strip(), account_number.strip())
-    conn.commit()
+    # Проверка длины номера единого лицевого счета
+    if len(account_number) > 10:
+        await message.answer("Номер единого лицевого счета не должен превышать 10 символов")
+    else:
+        # Сохранение информации о пользователе в базе данных
+        cursor.execute(
+            "INSERT INTO users (telegram_id, chat_id, first_name, last_name, username, full_name, account_number) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            message.from_user.id, message.chat.id, message.from_user.first_name, message.from_user.last_name,
+            message.from_user.username, full_name.strip(), account_number.strip())
+        conn.commit()
 
-    # Отправка сообщения с приветствием и информацией о пользователе
-    await message.answer(f"Добро пожаловать, {full_name}, ваш единый лицевой счет {account_number}")
+        # Отправка сообщения с приветствием и информацией о пользователе
+        await message.answer(f"Добро пожаловать, {full_name}, ваш единый лицевой счет {account_number}")
+        await send_action_keyboard(message.chat.id)
 
-    # Отправка клавиатуры с кнопками для выбора действия
-    await send_action_keyboard(message.chat.id)
-
-    # Сброс состояния
-    await state.finish()
+        # Сброс состояния
+        await state.finish()
 
 
 @dp.callback_query_handler(lambda c: c.data == 'subscribe')
@@ -186,13 +190,16 @@ async def process_location(message: types.Message, state: FSMContext):
         message.from_user.id, meter_type, serial_number, location)
     conn.commit()
 
-    # Отправка сообщения об успешной регистрации прибора учета
+    # Словарь с переводом для meter_type
+    meter_type_translation_ = {'cold': 'холодной воды', 'hot': 'горячей воды'}
 
+    # Отправка сообщения об успешной регистрации прибора учета
     await message.answer(
-        f"Прибор учета {meter_type} зарегистрирован: серийный номер {serial_number}, расположение {location}")
+        f"Прибор учета {meter_type_translation_[meter_type]} зарегистрирован: серийный номер {serial_number}, расположение {location}")
 
     # Сброс состояния
     await state.finish()
+    await send_action_keyboard(message.chat.id)
 
 
 selected_counter_id = None
@@ -233,7 +240,7 @@ async def process_callback_add_counter_value(callback_query: types.CallbackQuery
         counter_id = row[0]
         counter_type = row[1]
         serial_number = row[2]
-        button_text = f"{counter_id}: {counter_type} ({serial_number})"
+        button_text = f"{counter_id}: {meter_type_translation[counter_type]} ({serial_number})"
         button_callback_data = f"select_counter:{counter_id}"
         buttons.append(InlineKeyboardButton(button_text, callback_data=button_callback_data))
 
@@ -266,6 +273,7 @@ async def process_counter_value(message: types.Message):
 
     # Сброс значения глобальной переменной
     selected_counter_id = None
+    await send_action_keyboard(message.chat.id)
 
 
 @dp.callback_query_handler(lambda c: c.data == 'calculate_payment')
@@ -283,13 +291,13 @@ async def process_callback_calculate_payment(callback_query: types.CallbackQuery
     for row in rows:
         meter_id = row[0]
         meter_type = row[1]
-        button_text = f"{meter_id}: {meter_type}"
+        button_text = f"{meter_id}: {meter_type_translation[meter_type]}"
         if meter_type:
             button = InlineKeyboardButton(button_text, callback_data=f'meter_{meter_id}')
             buttons.append(button)
 
     # Создание кнопки для расчета оплаты сточных вод
-    sewage_button = InlineKeyboardButton('Расчитать оплату сточных вод', callback_data='sewage_payment')
+    sewage_button = InlineKeyboardButton('Расчёт платы сточных вод', callback_data='sewage_payment')
 
     # Создание клавиатуры
     keyboard = InlineKeyboardMarkup()
@@ -297,7 +305,7 @@ async def process_callback_calculate_payment(callback_query: types.CallbackQuery
     keyboard.add(sewage_button)
 
     # Отправка сообщения с клавиатурой
-    await bot.send_message(callback_query.from_user.id, 'Выберите счетчик или расчитайте оплату сточных вод:',
+    await bot.send_message(callback_query.from_user.id, 'Выберите счетчик или рассчитайте оплату сточных вод:',
                            reply_markup=keyboard)
 
 
@@ -310,22 +318,31 @@ async def process_callback_meter(callback_query: types.CallbackQuery):
 
     # Выборка информации о показателях счетчика из таблицы
     cursor.execute(
-        "SELECT m.type, SUM(cv.value) FROM counter_values cv JOIN meters m ON cv.counter_id = m.id WHERE cv.user_id = (SELECT id FROM users WHERE telegram_id = ?) AND cv.counter_id = ? GROUP BY m.type",
+        "SELECT TOP 2 m.type, cv.value FROM counter_values cv JOIN meters m ON cv.counter_id = m.id WHERE cv.user_id = (SELECT id FROM users WHERE telegram_id = ?) AND cv.counter_id = ? ORDER BY cv.timestamp DESC",
         callback_query.from_user.id, meter_id)
-    row = cursor.fetchone()
+    rows = cursor.fetchall()
 
     # Расчет платежа
-    if row:
-        meter_type = row[0]
-        total_usage = row[1]
+    if len(rows) > 0:
+        meter_type = rows[0][0]
+        usage = rows[0][1]
+        if len(rows) > 1:
+            usage -= rows[1][1]
         if meter_type == 'cold':
-            total_payment = total_usage * 45
+            price_per_unit = 45
+            total_payment = usage * price_per_unit
             await bot.send_message(callback_query.from_user.id,
-                                   f"Сумма к оплате за холодную воду: {total_payment} рублей")
+                                   f"Показания\n{rows[0][1]}-{(rows[1][1] if len(rows) > 1 else 0)}={usage} м3\nНачисление по счетчику\n{usage} м3 * {price_per_unit} рублей = {total_payment} рублей\nИтого к оплате\n{total_payment} рублей")
+
         elif meter_type == 'hot':
-            total_payment = total_usage * 55
+            price_per_unit = 55
+            total_payment = usage * price_per_unit
             await bot.send_message(callback_query.from_user.id,
-                                   f"Сумма к оплате за горячую воду: {total_payment} рублей")
+                                   f"Показания\n{rows[0][1]}-{(rows[1][1] if len(rows) > 1 else 0)}={usage} м3\nНачисление по счетчику\n{usage} м3 * {price_per_unit} рублей = {total_payment} рублей\nИтого к оплате\n{total_payment} рублей")
+    else:
+        await bot.send_message(callback_query.from_user.id,
+                               f"Нет показаний для расчета оплаты")
+
 
 @dp.callback_query_handler(lambda c: c.data == 'sewage_payment')
 async def process_callback_sewage_payment(callback_query: types.CallbackQuery):
