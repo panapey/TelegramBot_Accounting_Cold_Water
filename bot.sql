@@ -11,7 +11,9 @@ CREATE TABLE users (
     chat_id BIGINT NOT NULL,
     first_name NVARCHAR(255),
     last_name NVARCHAR(255),
-    username NVARCHAR(255)
+    username NVARCHAR(255),
+    full_name NVARCHAR(255), -- Добавление поля ФИО
+    account_number NVARCHAR(255) -- Добавление поля единый лицевой счет
 );
 
 -- Создание таблицы приборов учета
@@ -21,6 +23,7 @@ CREATE TABLE meters (
     type NVARCHAR(255) NOT NULL,
     serial_number NVARCHAR(255) NOT NULL,
     location NVARCHAR(255) NOT NULL,
+    meter_type NVARCHAR(255), -- Добавление поля тип счетчика
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
