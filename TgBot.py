@@ -11,13 +11,13 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 logging.basicConfig(level=logging.INFO)
 
 # Инициализация бота и диспетчера
-bot = Bot(token="5604421408:AAGvzPFtK6iZ71xKYGG7XH_Zhkjji9vm1tU")
+bot = Bot(token="YOUR_BOT_TOKEN")
 storage = MemoryStorage()
 dp = Dispatcher(bot, storage=storage)
 
 # Подключение к базе данных
 conn = pyodbc.connect("DRIVER={ODBC Driver 17 for SQL Server};"
-                      "SERVER=LAPTOP-DA4JVMQ8\SQLEXPRESS;"
+                      "SERVER=YOUR_SERVER;"
                       "DATABASE=botdb;"
                       "Trusted_Connection=yes;")
 cursor = conn.cursor()
@@ -45,8 +45,10 @@ async def send_action_keyboard(chat_id):
     # Создание кнопок
     button1 = InlineKeyboardButton("Подписаться на уведомления", callback_data="subscribe")
     button2 = InlineKeyboardButton("Зарегистрировать прибор учета", callback_data="register_meter")
-    button3 = InlineKeyboardButton("Добавить показание счетчика", callback_data="add_counter_value")
-    button4 = InlineKeyboardButton("Рассчитать платеж", callback_data="calculate_payment")
+    button3 = InlineKeyboardButton("Удалить прибор учета", callback_data="delete_counter")
+    button4 = InlineKeyboardButton("Вывести приборы учета", callback_data="display_counters")
+    button5 = InlineKeyboardButton("Добавить показание счетчика", callback_data="add_counter_value")
+    button6 = InlineKeyboardButton("Рассчитать платеж", callback_data="calculate_payment")
 
     # Создание клавиатуры
     keyboard = InlineKeyboardMarkup()
@@ -54,6 +56,8 @@ async def send_action_keyboard(chat_id):
     keyboard.add(button2)
     keyboard.add(button3)
     keyboard.add(button4)
+    keyboard.add(button5)
+    keyboard.add(button6)
 
     # Отправка сообщения с клавиатурой
     await bot.send_message(chat_id, "Выберите действие:", reply_markup=keyboard)
@@ -202,6 +206,42 @@ async def process_location(message: types.Message, state: FSMContext):
     await send_action_keyboard(message.chat.id)
 
 
+@dp.callback_query_handler(lambda c: c.data == 'display_counters')
+async def process_callback_display_counters(callback_query: types.CallbackQuery):
+    await bot.answer_callback_query(callback_query.id)
+
+    # Вызов функции для отображения приборов учета
+    await display_counters(callback_query.from_user.id)
+
+
+async def display_counters(user_id: int):
+    # Выборка информации о приборах учета пользователя из таблицы
+    cursor.execute(
+        "SELECT id, type, serial_number, location FROM meters WHERE user_id = (SELECT id FROM users WHERE telegram_id = ?) ORDER BY type",
+        (user_id))
+    rows = cursor.fetchall()
+    print(f"Rows: {rows}")
+
+    # Формирование текста сообщения
+    text = "Ваши приборы учета:\n"
+
+    previous_counter_type = None
+    for row in rows:
+        counter_type = row[1]
+        serial_number = row[2]
+        location = row[3]
+
+        # Добавление подзаголовка для списка приборов учета текущего типа
+        if counter_type != previous_counter_type:
+            text += f"\n{meter_type_translation[counter_type]}:\n"
+
+        text += f"- {serial_number}, местоположение '{location}'\n"
+        previous_counter_type = counter_type
+
+    # Отправка сообщения с информацией о приборах учета
+    await bot.send_message(user_id, text)
+
+
 selected_counter_id = None
 
 
@@ -240,7 +280,7 @@ async def process_callback_add_counter_value(callback_query: types.CallbackQuery
         counter_id = row[0]
         counter_type = row[1]
         serial_number = row[2]
-        button_text = f"{counter_id}: {meter_type_translation[counter_type]} ({serial_number})"
+        button_text = f"{serial_number}: {meter_type_translation[counter_type]}"
         button_callback_data = f"select_counter:{counter_id}"
         buttons.append(InlineKeyboardButton(button_text, callback_data=button_callback_data))
 
@@ -268,8 +308,12 @@ async def process_counter_value(message: types.Message):
         message.from_user.id, selected_counter_id, value)
     conn.commit()
 
-    # Отправка сообщения об успешном добавлении показания счетчика
-    await message.answer(f"Значение счетчика {selected_counter_id} добавлено: {value}")
+    # Get the serial number of the selected counter
+    cursor.execute("SELECT serial_number FROM meters WHERE id = ?", (selected_counter_id,))
+    serial_number = cursor.fetchone()[0]
+
+    # Send the message with the serial number
+    await message.answer(f"Значение счетчика {serial_number} добавлено: {value}")
 
     # Сброс значения глобальной переменной
     selected_counter_id = None
@@ -282,7 +326,7 @@ async def process_callback_calculate_payment(callback_query: types.CallbackQuery
 
     # Выборка информации о зарегистрированных счетчиках
     cursor.execute(
-        "SELECT m.id, m.type FROM meters m WHERE m.user_id = (SELECT id FROM users WHERE telegram_id = ?)",
+        "SELECT m.id, m.type, m.serial_number FROM meters m WHERE m.user_id = (SELECT id FROM users WHERE telegram_id = ?)",
         callback_query.from_user.id)
     rows = cursor.fetchall()
 
@@ -291,7 +335,8 @@ async def process_callback_calculate_payment(callback_query: types.CallbackQuery
     for row in rows:
         meter_id = row[0]
         meter_type = row[1]
-        button_text = f"{meter_id}: {meter_type_translation[meter_type]}"
+        serial_number = row[2]
+        button_text = f"{serial_number}: {meter_type_translation[meter_type]}"
         if meter_type:
             button = InlineKeyboardButton(button_text, callback_data=f'meter_{meter_id}')
             buttons.append(button)
@@ -348,18 +393,94 @@ async def process_callback_meter(callback_query: types.CallbackQuery):
 async def process_callback_sewage_payment(callback_query: types.CallbackQuery):
     await bot.answer_callback_query(callback_query.id)
 
-    # Выборка информации о показателях всех счетчиков из таблицы
+    # Выборка информации о показателях счетчиков из таблицы
     cursor.execute(
-        "SELECT SUM(cv.value) FROM counter_values cv JOIN meters m ON cv.counter_id = m.id WHERE cv.user_id = (SELECT id FROM users WHERE telegram_id = ?)",
+        "SELECT m.id, cv.value FROM counter_values cv JOIN meters m ON cv.counter_id = m.id WHERE cv.user_id = (SELECT id FROM users WHERE telegram_id = ?) ORDER BY cv.timestamp DESC",
         callback_query.from_user.id)
-    total_usage_row = cursor.fetchone()
+    rows = cursor.fetchall()
 
-    # Расчет платежа за сточные воды
-    if total_usage_row:
-        total_usage = total_usage_row[0]
-        total_sewage_payment = total_usage * 35
-        await bot.send_message(callback_query.from_user.id,
-                               f"Сумма к оплате за сточные воды: {total_sewage_payment} рублей")
+    # Расчет общего использования
+    usage_by_meter = {}
+    for row in rows:
+        meter_id = row[0]
+        value = row[1]
+        if meter_id not in usage_by_meter:
+            usage_by_meter[meter_id] = value
+        else:
+            usage_by_meter[meter_id] -= value
+
+    total_usage = sum(usage_by_meter.values())
+    price_per_unit = 35
+    total_sewage_payment = total_usage * price_per_unit
+    await bot.send_message(callback_query.from_user.id,
+                           f"Показания\n{total_usage} м3\n\nНачисление по счетчику\n{total_usage} м3 * {price_per_unit} рублей = {total_sewage_payment} рублей\n\nИтого к оплате\n{total_sewage_payment} рублей")
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith('delete_counter:'))
+async def process_callback_delete_counter(callback_query: types.CallbackQuery):
+    await bot.answer_callback_query(callback_query.id)
+
+    # Получение выбранного прибора учета из данных callback
+    counter_id = int(callback_query.data.split(':')[1])
+
+    # Удаление записей из таблицы показателей счетчиков
+    cursor.execute("DELETE FROM counter_values WHERE counter_id = ?", (counter_id,))
+    conn.commit()
+
+    # Удаление прибора учета из базы данных
+    cursor.execute("DELETE FROM meters WHERE id = ?", (counter_id,))
+    conn.commit()
+
+    # Отправка сообщения об успешном удалении прибора учета
+    await bot.send_message(callback_query.from_user.id, f"Прибор учета {counter_id} удален")
+
+    # Обновление списка приборов учета
+    await display_counters_list(callback_query.from_user.id)
+
+
+async def display_counters_list(user_id: int):
+    # Выборка информации о приборах учета пользователя из таблицы
+    cursor.execute(
+        "SELECT id, type, serial_number FROM meters WHERE user_id = (SELECT id FROM users WHERE telegram_id = ?)",
+        (user_id,))
+    rows = cursor.fetchall()
+
+    if not rows:
+        # Отправка сообщения об отсутствии приборов учета
+        await bot.send_message(user_id, "У вас нет приборов учета")
+        return
+
+    # Формирование текста сообщения
+    text = "Выберите прибор учета для удаления:\n"
+
+    # Создание кнопок для выбора прибора учета
+    buttons = []
+    for row in rows:
+        counter_id = row[0]
+        counter_type = row[1]
+        serial_number = row[2]
+        button_text = f"{serial_number}: {meter_type_translation[counter_type]}"
+        button_callback_data = f"delete_counter:{counter_id}"
+        buttons.append(InlineKeyboardButton(button_text, callback_data=button_callback_data))
+
+        # Вывод значения callback_data для проверки
+        print(f"Button callback_data: {button_callback_data}")
+
+    # Создание клавиатуры с кнопками
+    keyboard = InlineKeyboardMarkup(row_width=1)
+    keyboard.add(*buttons)
+
+    # Отправка сообщения с выбором прибора учета для удаления
+    await bot.send_message(user_id, text, reply_markup=keyboard)
+
+
+@dp.callback_query_handler(lambda c: c.data == 'delete_counter')
+async def process_callback_delete_counter(callback_query: types.CallbackQuery):
+    await bot.answer_callback_query(callback_query.id)
+
+    # Вызов функции для отображения списка приборов учета
+    await display_counters_list(callback_query.from_user.id)
+    await send_action_keyboard(callback_query.message.chat.id)
 
 
 if __name__ == '__main__':
