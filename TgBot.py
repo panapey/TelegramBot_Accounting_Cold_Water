@@ -11,7 +11,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 logging.basicConfig(level=logging.INFO)
 
 # Инициализация бота и диспетчера
-bot = Bot(token="YOUR_BOT_TOKEN")
+bot = Bot(token="5604421408:AAGvzPFtK6iZ71xKYGG7XH_Zhkjji9vm1tU")
 storage = MemoryStorage()
 dp = Dispatcher(bot, storage=storage)
 
