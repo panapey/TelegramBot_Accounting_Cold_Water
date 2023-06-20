@@ -17,9 +17,10 @@ dp = Dispatcher(bot, storage=storage)
 
 # Подключение к базе данных
 conn = pyodbc.connect("DRIVER={ODBC Driver 17 for SQL Server};"
-                      "SERVER=YOUR_SERVER;"
+                      "SERVER=LAPTOP-DA4JVMQ8\SQLEXPRESS;"
                       "DATABASE=botdb;"
                       "Trusted_Connection=yes;")
+cursor = conn.cursor()
 
 meter_type_translation = {'cold': 'холодная вода', 'hot': 'горячая вода'}
 
@@ -312,7 +313,90 @@ async def process_counter_value(message: types.Message):
         message.from_user.id, selected_counter_id, value)
     conn.commit()
 
-    await message.answer(f"Значение счетчика {counter_id} добавлено: {value}")
+    # Получение серийного номера выбранного счетчика
+    cursor.execute("SELECT serial_number FROM meters WHERE id = ?", (selected_counter_id,))
+    serial_number = cursor.fetchone()[0]
+
+    # ОТправка сообщения с серийным номером
+    await message.answer(f"Значение счетчика {serial_number} добавлено: {value}")
+
+    # Сброс значения глобальной переменной
+    selected_counter_id = None
+    await send_action_keyboard(message.chat.id)
+
+
+@dp.callback_query_handler(lambda c: c.data == 'calculate_payment')
+async def process_callback_calculate_payment(callback_query: types.CallbackQuery):
+    await bot.answer_callback_query(callback_query.id)
+
+    # Выборка информации о зарегистрированных счетчиках
+    cursor.execute(
+        "SELECT m.id, m.type, m.serial_number FROM meters m WHERE m.user_id = (SELECT id FROM users WHERE telegram_id "
+        "= ?)",
+        callback_query.from_user.id)
+    rows = cursor.fetchall()
+
+    # Создание кнопок для выбора счетчика
+    buttons = []
+    for row in rows:
+        meter_id = row[0]
+        meter_type = row[1]
+        serial_number = row[2]
+        button_text = f"{serial_number}: {meter_type_translation[meter_type]}"
+        if meter_type:
+            button = InlineKeyboardButton(button_text, callback_data=f'meter_{meter_id}')
+            buttons.append(button)
+
+    # Создание кнопки для расчета оплаты сточных вод
+    sewage_button = InlineKeyboardButton('Расчёт платы сточных вод', callback_data='sewage_payment')
+
+    # Создание клавиатуры
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(*buttons)
+    keyboard.add(sewage_button)
+
+    # Отправка сообщения с клавиатурой
+    await bot.send_message(callback_query.from_user.id, 'Выберите счетчик или рассчитайте оплату сточных вод:',
+                           reply_markup=keyboard)
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith('meter_'))
+async def process_callback_meter(callback_query: types.CallbackQuery):
+    await bot.answer_callback_query(callback_query.id)
+
+    # Получение идентификатора счетчика из данных callback
+    meter_id = int(callback_query.data.split('_')[1])
+
+    # Выборка информации о показателях счетчика из таблицы
+    cursor.execute(
+        "SELECT TOP 2 m.type, cv.value FROM counter_values cv JOIN meters m ON cv.counter_id = m.id WHERE cv.user_id "
+        "= (SELECT id FROM users WHERE telegram_id = ?) AND cv.counter_id = ? ORDER BY cv.timestamp DESC",
+        callback_query.from_user.id, meter_id)
+    rows = cursor.fetchall()
+
+    # Расчет платежа
+    if len(rows) > 0:
+        meter_type = rows[0][0]
+        usage = rows[0][1]
+        if len(rows) > 1:
+            usage -= rows[1][1]
+        if meter_type == 'cold':
+            price_per_unit = 45
+            total_payment = usage * price_per_unit
+            await bot.send_message(callback_query.from_user.id,
+                                   f"Показания\n{rows[0][1]}-{(rows[1][1] if len(rows) > 1 else 0)}={usage} м3\n"
+                                   f"Начисление по счетчику\n{usage} м3 * {price_per_unit} рублей = {total_payment} "
+                                   f"рублей\nИтого к оплате\n{total_payment} рублей")
+
+        elif meter_type == 'hot':
+            price_per_unit = 55
+            total_payment = usage * price_per_unit
+            await bot.send_message(callback_query.from_user.id,
+                                   f"Показания\n{rows[0][1]}-{(rows[1][1] if len(rows) > 1 else 0)}={usage} м3\n"
+                                   f"Начисление по счетчику\n{usage} м3 * {price_per_unit} рублей = {total_payment} "
+                                   f"рублей\nИтого к оплате\n{total_payment} рублей")
+    else:
+        await bot.send_message(callback_query.from_user.id, "Нет показаний для расчета оплаты")
 
 
 @dp.callback_query_handler(lambda c: c.data == 'sewage_payment')
@@ -350,7 +434,7 @@ async def process_callback_sewage_payment(callback_query: types.CallbackQuery):
 async def process_callback_delete_counter(callback_query: types.CallbackQuery):
     await bot.answer_callback_query(callback_query.id)
     # Получение выбранного прибора учета из данных callback
-    print(callback_query.data)
+
     counter_id, serial_number = map(int, callback_query.data.split(':')[1:])
 
     cursor.execute("DELETE FROM counter_values WHERE counter_id = ?", (counter_id,))
@@ -390,7 +474,6 @@ async def display_counters_list(user_id: int):
         serial_number = row[2]
         button_text = f"{serial_number}: {meter_type_translation[counter_type]}"
         button_callback_data = f"delete_counter:{counter_id}:{serial_number}"
-
         buttons.append(InlineKeyboardButton(button_text, callback_data=button_callback_data))
 
         # Вывод значения callback_data для проверки
